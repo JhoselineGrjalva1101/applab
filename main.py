@@ -1,4 +1,4 @@
-import os, inspect, importlib, pkgutil, flet as ft
+import os, importlib, pkgutil, flet as ft
 import apps
 
 def main(page: ft.Page):
@@ -11,9 +11,7 @@ def main(page: ft.Page):
     def abrir(nombre):
         def _abrir(e):
             modulo = importlib.reload(importlib.import_module(f"apps.{nombre}"))
-            # Si la app pide "page" (para usar micrófono o selector de archivos), se la pasamos.
-            pide_page = len(inspect.signature(modulo.vista).parameters) > 0
-            cuerpo.content = modulo.vista(page) if pide_page else modulo.vista()
+            cuerpo.content = modulo.vista()
             page.update()
         return _abrir
 
