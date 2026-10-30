@@ -7,7 +7,7 @@ from ia import ia
 from multimedia import ia_media, pcm_a_wav
 
 
-def vista() -> ft.Control:
+def vista(page: ft.Page | None = None) -> ft.Control:
     cian = ft.Colors.CYAN
     entrada = ft.TextField(
         label="Error de Python",
@@ -20,12 +20,34 @@ def vista() -> ft.Control:
         focused_border_color=cian,
         cursor_color=cian,
     )
+    nivel_programador = ft.Dropdown(
+        label="Nivel del programador",
+        value="Principiante",
+        options=[
+            ft.DropdownOption(key="Principiante", text="Principiante"),
+            ft.DropdownOption(key="Intermedio", text="Intermedio"),
+            ft.DropdownOption(key="Avanzado", text="Avanzado"),
+        ],
+        border_color=cian,
+        focused_border_color=cian,
+    )
     estado = ft.Text()
     resultados = ft.Column(spacing=10)
+    historial_visual = ft.Column(spacing=6)
+    ultima_solucion: str | None = None
     boton = ft.Button(
         "Investigar error",
         color=ft.Colors.BLACK,
         bgcolor=cian,
+    )
+    boton_copiar = ft.Button(
+        "Copiar solución",
+        icon=ft.Icons.COPY,
+        disabled=True,
+    )
+    boton_limpiar = ft.Button(
+        "Limpiar pantalla",
+        icon=ft.Icons.CLEAR_ALL,
     )
     boton_audio = ft.Button(
         "Grabar descripción",
@@ -83,11 +105,114 @@ def vista() -> ft.Control:
 
     pasos = (
         ("que_paso", "Qué pasó"),
-        ("por_que", "Por qué"),
-        ("como_se_arregla", "Cómo se arregla"),
+        ("por_que_ocurrio", "Por qué ocurrió"),
+        ("como_solucionarlo", "Cómo solucionarlo"),
     )
 
+    async def copiar_solucion(e):
+        if not ultima_solucion:
+            return
+
+        try:
+            portapapeles = ft.Clipboard()
+            if portapapeles not in e.page.services:
+                e.page.services.append(portapapeles)
+            await portapapeles.set(ultima_solucion)
+            e.page.show_dialog(
+                ft.SnackBar(
+                    content="¡Copiado al portapapeles!",
+                    duration=2200,
+                    bgcolor=cian,
+                )
+            )
+        except Exception:
+            # Avisa si el sistema no permite acceder al portapapeles.
+            estado.value = "No pude copiar la solución al portapapeles."
+            estado.color = ft.Colors.RED
+            e.page.update()
+
+    def limpiar_pantalla(e):
+        nonlocal ultima_solucion
+        entrada.value = ""
+        archivo_info.value = ""
+        estado.value = ""
+        resultados.controls.clear()
+        ultima_solucion = None
+        boton_copiar.disabled = True
+        # El historial queda disponible; solo se limpia el diagnóstico actual.
+        e.page.update()
+
+    def adaptar_instruccion(instruccion: str) -> str:
+        nivel = nivel_programador.value or "Principiante"
+        tonos = {
+            "Principiante": (
+                "Usa un tono didáctico y paciente, define los términos técnicos "
+                "y explica los pasos como para alguien que está aprendiendo."
+            ),
+            "Intermedio": (
+                "Usa un tono claro y práctico, explica la causa y ofrece una "
+                "solución concreta sin extenderte en conceptos básicos."
+            ),
+            "Avanzado": (
+                "Usa un tono técnico y conciso, incluye detalles relevantes de "
+                "implementación y evita explicaciones introductorias."
+            ),
+        }
+        tono = tonos.get(nivel, tonos["Principiante"])
+        return f"{instruccion}\n\nNivel del programador: {nivel}. {tono}"
+
+    def obtener_historial(pagina_actual: ft.Page) -> list[str]:
+        datos_sesion = pagina_actual.data
+        if datos_sesion is None:
+            datos_sesion = {}
+            pagina_actual.data = datos_sesion
+        if not isinstance(datos_sesion, dict):
+            raise TypeError("Los datos de sesión de la página deben ser un diccionario.")
+
+        historial = datos_sesion.get("detective_de_bugs_historial")
+        if not isinstance(historial, list) or any(
+            not isinstance(error, str) for error in historial
+        ):
+            historial = []
+            datos_sesion["detective_de_bugs_historial"] = historial
+        return historial
+
+    def actualizar_historial(historial: list[str]) -> None:
+        historial_visual.controls.clear()
+        for error in reversed(historial):
+            vista_previa = " ".join(error.split())
+            if len(vista_previa) > 180:
+                vista_previa = vista_previa[:180] + "..."
+            historial_visual.controls.append(
+                ft.Container(
+                    content=ft.Text(vista_previa, size=13),
+                    padding=10,
+                    bgcolor=ft.Colors.with_opacity(0.05, cian),
+                    border=ft.Border.all(1, ft.Colors.OUTLINE),
+                    border_radius=8,
+                )
+            )
+
+    def registrar_error(error: str, historial: list[str]) -> None:
+        historial.append(error)
+        del historial[:-5]
+        actualizar_historial(historial)
+
+    def incluir_historial(error_actual: str, historial: list[str]) -> str:
+        if not historial:
+            return error_actual
+
+        anteriores = "\n".join(
+            f"{numero}. {error}"
+            for numero, error in enumerate(historial, start=1)
+        )
+        return (
+            "Errores consultados anteriormente (úsalos como contexto):\n"
+            f"{anteriores}\n\nNuevo error a analizar:\n{error_actual}"
+        )
+
     def mostrar_diagnostico(respuesta):
+        nonlocal ultima_solucion
         if not isinstance(respuesta, dict) or any(
             not isinstance(respuesta.get(clave), str)
             or not respuesta[clave].strip()
@@ -95,6 +220,8 @@ def vista() -> ft.Control:
         ):
             raise ValueError("La respuesta no contiene los tres pasos esperados.")
 
+        ultima_solucion = respuesta["como_solucionarlo"].strip()
+        boton_copiar.disabled = False
         resultados.controls.clear()
         for numero, (clave, titulo) in enumerate(pasos, start=1):
             resultados.controls.append(
@@ -140,6 +267,8 @@ def vista() -> ft.Control:
         if grabando or transcribiendo:
             return
 
+        historial = obtener_historial(e.page)
+        actualizar_historial(historial)
         boton_archivo.disabled = True
         boton_imagen.disabled = True
         boton_audio.disabled = True
@@ -190,11 +319,15 @@ def vista() -> ft.Control:
             instruccion = (
                 "Analiza el código fuente de Python y detecta el error o bug "
                 "más relevante. Devuelve únicamente un objeto JSON con las "
-                'claves "que_paso", "por_que" y "como_se_arregla". Cada valor '
+                'claves "que_paso", "por_que_ocurrio" y "como_solucionarlo". '
+                "Cada valor "
                 "debe ser una explicación breve y clara en español. Si el "
                 "archivo no contiene un error evidente, indícalo en la respuesta."
             )
-            respuesta = await asyncio.to_thread(ia, instruccion, codigo, True)
+            instruccion = adaptar_instruccion(instruccion)
+            prompt = incluir_historial(codigo, historial)
+            registrar_error(f"{archivo.name}: {codigo}", historial)
+            respuesta = await asyncio.to_thread(ia, instruccion, prompt, True)
             mostrar_diagnostico(respuesta)
             estado.value = ""
         except ValueError as error:
@@ -216,6 +349,8 @@ def vista() -> ft.Control:
         if grabando or transcribiendo:
             return
 
+        historial = obtener_historial(e.page)
+        actualizar_historial(historial)
         boton_imagen.disabled = True
         boton_archivo.disabled = True
         boton_audio.disabled = True
@@ -270,19 +405,25 @@ def vista() -> ft.Control:
             instruccion = (
                 "Lee el mensaje de error de Python visible en la imagen y "
                 "analízalo. Devuelve únicamente un objeto JSON con las claves "
-                '"que_paso", "por_que" y "como_se_arregla". Cada valor debe ser '
+                '"que_paso", "por_que_ocurrio" y "como_solucionarlo". Cada valor '
+                "debe ser "
                 "una explicación breve y clara en español. Si no hay un error "
                 "legible, indícalo en la clave \"que_paso\" y aclara las demás."
             )
+            instruccion = adaptar_instruccion(instruccion)
             respuesta = await asyncio.to_thread(
                 ia_media,
                 instruccion,
                 imagen,
                 mime,
-                "",
+                incluir_historial(
+                    f"Analiza el error visible en la imagen {archivo.name}.",
+                    historial,
+                ),
                 True,
             )
             mostrar_diagnostico(respuesta)
+            registrar_error(f"Imagen {archivo.name}: {respuesta['que_paso'].strip()}", historial)
             estado.value = ""
         except ValueError as error:
             estado.value = str(error)
@@ -405,6 +546,8 @@ def vista() -> ft.Control:
             e.page.update()
 
     async def investigar(e):
+        historial = obtener_historial(e.page)
+        actualizar_historial(historial)
         error_python = (entrada.value or "").strip()
         resultados.controls.clear()
 
@@ -420,6 +563,9 @@ def vista() -> ft.Control:
             e.page.update()
             return
 
+        nonlocal ultima_solucion
+        ultima_solucion = None
+        boton_copiar.disabled = True
         boton.disabled = True
         progreso.visible = True
         estado.value = "Analizando el error..."
@@ -428,14 +574,17 @@ def vista() -> ft.Control:
 
         instruccion = (
             "Analiza el error de Python proporcionado. Devuelve únicamente "
-            "un objeto JSON con las claves \"que_paso\", \"por_que\" y "
-            "\"como_se_arregla\". Cada valor debe ser una explicación breve "
+            "un objeto JSON con las claves \"que_paso\", \"por_que_ocurrio\" "
+            "y \"como_solucionarlo\". Cada valor debe ser una explicación breve "
             "y clara en español. No incluyas números ni numeración: la "
             "aplicación presentará la respuesta en tres pasos."
         )
+        instruccion = adaptar_instruccion(instruccion)
 
         try:
-            respuesta = await asyncio.to_thread(ia, instruccion, error_python, True)
+            prompt = incluir_historial(error_python, historial)
+            registrar_error(error_python, historial)
+            respuesta = await asyncio.to_thread(ia, instruccion, prompt, True)
             mostrar_diagnostico(respuesta)
             estado.value = ""
         except Exception:
@@ -448,9 +597,14 @@ def vista() -> ft.Control:
             e.page.update()
 
     boton.on_click = investigar
+    boton_copiar.on_click = copiar_solucion
+    boton_limpiar.on_click = limpiar_pantalla
     boton_audio.on_click = dictar
     boton_imagen.on_click = analizar_imagen
     boton_archivo.on_click = analizar_archivo
+
+    if page is not None:
+        actualizar_historial(obtener_historial(page))
 
     return ft.Container(
         content=ft.Column(
@@ -463,6 +617,7 @@ def vista() -> ft.Control:
                 ),
                 ft.Text("Pega un error de Python y descubre cómo resolverlo."),
                 entrada,
+                nivel_programador,
                 boton_audio,
                 boton_imagen,
                 boton_archivo,
@@ -470,7 +625,10 @@ def vista() -> ft.Control:
                 grabadora,
                 ft.Row([progreso, estado], spacing=8),
                 boton,
+                ft.Row([boton_copiar, boton_limpiar], spacing=8),
                 resultados,
+                ft.Text("Errores consultados recientemente", size=18, color=cian),
+                historial_visual,
             ],
             spacing=12,
             expand=True,
